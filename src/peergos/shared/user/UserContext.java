@@ -39,6 +39,7 @@ public class UserContext {
     private static final Logger LOG = Logger.getGlobal();
 
     public static final String SHARED_DIR_NAME = "shared";
+    public static final String GROUPS_FILENAME = ".groups.cbor"; // no clash possible with usernames possible because of dot
     public static final String FEED_DIR_NAME = ".feed";
     public static final String TRANSACTIONS_DIR_NAME = ".transactions";
     public static final String FRIEND_ANNOTATIONS_FILE_NAME = ".annotations";
@@ -1058,14 +1059,22 @@ public class UserContext {
         });
     }
 
+    private CompletableFuture<Groups> getGroupNameMappings() {
+        return FileUtils.getOrCreateObject(this,
+                Paths.get(username, SHARED_DIR_NAME, GROUPS_FILENAME),
+                () -> Groups.generate(crypto.random),
+                Cborable.parser(Groups::fromCbor));
+    }
+
     @JsMethod
     public CompletableFuture<SocialState> getSocialState() {
         return processFollowRequests()
-                .thenCompose(pending -> getFollowerRoots()
-                        .thenCompose(followerRoots -> getFriendRoots()
-                                .thenCompose(followingRoots -> getFollowers()
-                                        .thenCompose(followers -> getFriendAnnotations()
-                                        .thenApply(annotations -> new SocialState(pending, followers, followerRoots, followingRoots, annotations))))));
+                .thenCompose(pending -> getFollowerRoots().thenCompose(
+                        followerRoots -> getFriendRoots().thenCompose(
+                                followingRoots -> getFollowers().thenCompose(
+                                        followers -> getFriendAnnotations().thenCompose(
+                                                annotations -> getGroupNameMappings().thenApply(
+                                                        groups -> new SocialState(pending, followers, followerRoots, followingRoots, annotations, groups.uidToGroupName)))))));
     }
 
     @JsMethod
