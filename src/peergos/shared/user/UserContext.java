@@ -1786,7 +1786,8 @@ public class UserContext {
                             .filter(n -> !n.equals(ourName))
                             .collect(Collectors.toSet());
                     return Futures.reduceAll(friendNames, true,
-                            (b, name) -> root.getChildren(name +"/" + SHARED_DIR_NAME, crypto.hasher, network).thenApply(kids -> {
+                            (b, name) -> root.getChildren(name +"/" + SHARED_DIR_NAME, crypto.hasher, network)
+                                    .thenApply(kids -> {
                                 Set<FileWrapper> groupDirs = kids.stream()
                                         .filter(f -> f.isDirectory() && f.getName().startsWith("."))
                                         .collect(Collectors.toSet());
@@ -1795,7 +1796,7 @@ public class UserContext {
                                     friend.addGroup(new EntryPoint(group.getPointer().capability, name));
                                 }
                                 return true;
-                            }),
+                            }).exceptionally(t -> b),
                             (a, b) -> a && b)
                             .thenApply(x -> root);
                 });
