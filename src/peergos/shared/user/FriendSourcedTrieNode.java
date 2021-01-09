@@ -2,6 +2,7 @@ package peergos.shared.user;
 
 import peergos.shared.*;
 import peergos.shared.crypto.hash.*;
+import peergos.shared.social.*;
 import peergos.shared.user.fs.*;
 import peergos.shared.util.*;
 
@@ -16,6 +17,7 @@ public class FriendSourcedTrieNode implements TrieNode {
     private final IncomingCapCache cache;
     private final EntryPoint sharedDir;
     private final Crypto crypto;
+    private final List<EntryPoint> groups;
 
     public FriendSourcedTrieNode(IncomingCapCache cache,
                                  String ownerName,
@@ -25,6 +27,12 @@ public class FriendSourcedTrieNode implements TrieNode {
         this.ownerName = ownerName;
         this.sharedDir = sharedDir;
         this.crypto = crypto;
+        this.groups = new ArrayList<>();
+    }
+
+    public void addGroup(EntryPoint group) {
+        if (! groups.contains(group))
+            groups.add(group);
     }
 
     public static CompletableFuture<Optional<FriendSourcedTrieNode>> build(IncomingCapCache cache,
@@ -42,13 +50,12 @@ public class FriendSourcedTrieNode implements TrieNode {
      */
     public synchronized CompletableFuture<CapsDiff> ensureUptodate(Crypto crypto,
                                                                    NetworkAccess network) {
-        return cache.ensureFriendUptodate(ownerName, sharedDir, network);
+        return cache.ensureFriendUptodate(ownerName, sharedDir, groups, network);
     }
 
-    public synchronized CompletableFuture<CapsDiff> getCaps(long readByteOffset,
-                                                            long writeByteOffset,
+    public synchronized CompletableFuture<CapsDiff> getCaps(ProcessedCaps current,
                                                             NetworkAccess network) {
-        return cache.getCapsFrom(ownerName, sharedDir, readByteOffset, writeByteOffset, network);
+        return cache.getCapsFrom(ownerName, sharedDir, groups, current, network);
     }
 
     private CompletableFuture<Optional<FileWrapper>> getFriendRoot(NetworkAccess network) {
@@ -82,7 +89,19 @@ public class FriendSourcedTrieNode implements TrieNode {
                     .thenApply(opt -> opt.map(f -> f.withTrieNode(this)));
         Path file = Paths.get(ownerName + path);
         return ensureUptodate(crypto, network)
-                .thenCompose(x -> cache.getByPath(file, cache.getVersion(), hasher, network))
+                .thenCompose(x -> {
+                    List<CapabilityWithPath> newGroups = x.getNewCaps().stream()
+                            .filter(c -> c.path.startsWith("/" + ownerName + "/" + UserContext.SHARED_DIR_NAME))
+                            .collect(Collectors.toList());
+                    for (CapabilityWithPath groupCap : newGroups) {
+                        addGroup(new EntryPoint(groupCap.cap, ownerName));
+                    }
+                    if (newGroups.isEmpty())
+                        return Futures.of(true);
+                    return ensureUptodate(crypto, network)
+                            .thenApply(y -> true);
+                })
+                .thenCompose(y -> cache.getByPath(file, cache.getVersion(), hasher, network))
                 .thenApply(opt -> opt.map(f -> convert(f, path)));
     }
 
@@ -154,16 +173,12 @@ public class FriendSourcedTrieNode implements TrieNode {
     }
 
     @Override
-    public boolean isEmpty() {
+    public TrieNode getChildNode(String name) {
         throw new IllegalStateException("Not valid operation on FriendSourcedTrieNode.");
     }
 
-    public static class ReadAndWriteCaps {
-        public final CapabilitiesFromUser readCaps, writeCaps;
-
-        public ReadAndWriteCaps(CapabilitiesFromUser readCaps, CapabilitiesFromUser writeCaps) {
-            this.readCaps = readCaps;
-            this.writeCaps = writeCaps;
-        }
+    @Override
+    public boolean isEmpty() {
+        throw new IllegalStateException("Not valid operation on FriendSourcedTrieNode.");
     }
 }

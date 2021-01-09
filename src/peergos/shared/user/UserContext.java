@@ -1063,7 +1063,28 @@ public class UserContext {
         return FileUtils.getOrCreateObject(this,
                 Paths.get(username, SHARED_DIR_NAME, GROUPS_FILENAME),
                 () -> Groups.generate(crypto.random),
+                this::initialiseGroups,
                 Cborable.parser(Groups::fromCbor));
+    }
+
+    private CompletableFuture<Set<String>> getFriendNames() {
+        return getFriendRoots()
+                .thenApply(dirs -> dirs.stream()
+                        .map(FileWrapper::getName)
+                        .collect(Collectors.toSet()));
+    }
+
+    private CompletableFuture<Boolean> initialiseGroups(Groups g) {
+        return getFollowerNames().thenCompose(followers -> getFriendNames()
+                .thenCompose(friends -> {
+                    return Futures.reduceAll(g.uidToGroupName.entrySet(), true,
+                            (b, e) -> getUserRoot()
+                                    .thenCompose(home -> home.getOrMkdirs(Paths.get(SHARED_DIR_NAME, e.getKey()), network, true, crypto))
+                                    .thenCompose(x -> shareReadAccessWith(Paths.get(username, SHARED_DIR_NAME, e.getKey()),
+                                            e.getValue().equals(SocialState.FOLLOWERS_GROUP_NAME) ? followers : friends))
+                                    .thenApply(x -> true),
+                            (a, b) -> a && b);
+                }));
     }
 
     @JsMethod
@@ -1739,7 +1760,7 @@ public class UserContext {
                                                        String ourName,
                                                        NetworkAccess network,
                                                        Crypto crypto) {
-        // need to to retrieve all the entry points of our friends
+        // need to to retrieve all the entry points of our friends and any of their groups
         return ourRoot.getByPath(ourName, crypto.hasher, network)
                         .thenApply(Optional::get)
                 .thenCompose(homeDir -> time(() -> getFriendsEntryPoints(homeDir), "Get friend's entry points")
@@ -1758,7 +1779,26 @@ public class UserContext {
                                                     .orElse(t)).exceptionally(ex -> t),
                                             (a, b) -> a);
                                 })))
-                .exceptionally(Futures::logAndThrow);
+                .exceptionally(Futures::logAndThrow)
+                .thenCompose(root -> { // now add the groups from each friend
+                    Set<String> friendNames = root.getChildNames()
+                            .stream()
+                            .filter(n -> !n.equals(ourName))
+                            .collect(Collectors.toSet());
+                    return Futures.reduceAll(friendNames, true,
+                            (b, name) -> root.getChildren(name +"/" + SHARED_DIR_NAME, crypto.hasher, network).thenApply(kids -> {
+                                Set<FileWrapper> groupDirs = kids.stream()
+                                        .filter(f -> f.isDirectory() && f.getName().startsWith("."))
+                                        .collect(Collectors.toSet());
+                                FriendSourcedTrieNode friend = (FriendSourcedTrieNode) root.getChildNode(name);
+                                for (FileWrapper group : groupDirs) {
+                                    friend.addGroup(new EntryPoint(group.getPointer().capability, name));
+                                }
+                                return true;
+                            }),
+                            (a, b) -> a && b)
+                            .thenApply(x -> root);
+                });
     }
 
     private CompletableFuture<TrieNode> retrieveAndAddEntryPointToTrie(TrieNode root, EntryPoint e) {

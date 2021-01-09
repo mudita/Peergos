@@ -45,7 +45,7 @@ public class Groups implements Cborable {
         CborObject.CborMap m = (CborObject.CborMap) cbor;
         CborObject.CborMap r = m.get("n", c -> (CborObject.CborMap) c);
         Function<Cborable, String> getString = c -> ((CborObject.CborString) c).value;
-        Map<String, String> uidToNames = r.getMap(getString, getString);
+        Map<String, String> uidToNames = r.toMap(getString, getString);
 
         return new Groups(uidToNames);
     }

@@ -22,6 +22,7 @@ public class FileUtils {
     public static <T extends Cborable> CompletableFuture<T> getOrCreateObject(UserContext context,
                                                                               Path file,
                                                                               Supplier<T> generator,
+                                                                              Function<T, CompletableFuture<Boolean>> initializer,
                                                                               Function<byte[], T> parser) {
         return context.getByPath(file).thenCompose(opt -> {
             if (opt.isPresent())
@@ -32,8 +33,9 @@ public class FileUtils {
             byte[] raw = val.serialize();
             String filename = file.getFileName().toString();
             AsyncReader reader = AsyncReader.build(raw);
-            return context.getByPath(file.getParent()).thenCompose(dopt ->
-                    dopt.get().uploadAndReturnFile(filename, reader, raw.length, false, context.network, context.crypto))
+            return initializer.apply(val).thenCompose(x -> context.getByPath(file.getParent()))
+                    .thenCompose(dopt -> dopt.get()
+                            .uploadAndReturnFile(filename, reader, raw.length, false, context.network, context.crypto))
                     .thenApply(x -> val);
         });
     }

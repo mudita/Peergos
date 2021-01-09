@@ -362,7 +362,10 @@ public class IncomingCapCache {
         return worldRoot.version;
     }
 
-    public CompletableFuture<CapsDiff> ensureFriendUptodate(String friend, EntryPoint sharedDir, NetworkAccess network) {
+    public CompletableFuture<CapsDiff> ensureFriendUptodate(String friend,
+                                                            EntryPoint sharedDir,
+                                                            List<EntryPoint> groups,
+                                                            NetworkAccess network) {
         return getAndUpdateRoot(network)
                 .thenCompose(root -> root.getDescendentByPath(friend + FRIEND_STATE_SUFFIX, hasher, network)
                         .thenCompose(stateOpt -> {
@@ -371,41 +374,63 @@ public class IncomingCapCache {
                             return Serialize.readFully(stateOpt.get(), crypto, network)
                                     .thenApply(arr -> ProcessedCaps.fromCbor(CborObject.fromByteArray(arr)));
                         }))
-                .thenCompose(currentState -> ensureUptodate(friend, sharedDir, currentState, crypto, network));
+                .thenCompose(currentState -> ensureUptodate(friend, sharedDir, groups, currentState, crypto, network));
     }
 
     public CompletableFuture<CapsDiff> getCapsFrom(String friend,
                                                    EntryPoint originalSharedDir,
-                                                   long readByteOffset,
-                                                   long writeByteOffset,
+                                                   List<EntryPoint> groups,
+                                                   ProcessedCaps current,
                                                    NetworkAccess network) {
-        return NetworkAccess.getLatestEntryPoint(originalSharedDir, network)
-                .thenCompose(sharedDir ->
-                        CapabilityStore.loadReadAccessSharingLinksFromIndex(null, sharedDir.file,
-                                null, network, crypto, readByteOffset, false, true)
-                                .thenCompose(newReadCaps ->
-                                        getWritableCaps(sharedDir.file, writeByteOffset, crypto, network)
-                                        .thenApply(writeable ->
-                                                new FriendSourcedTrieNode.ReadAndWriteCaps(newReadCaps, writeable))))
-                .thenApply(newCaps -> new CapsDiff(readByteOffset, writeByteOffset, newCaps));
+        return retrieveNewCaps(originalSharedDir, current, network, crypto)
+                .thenCompose(direct -> Futures.reduceAll(groups,
+                        direct,
+                        (d, e) -> NetworkAccess.getLatestEntryPoint(e, network)
+                                .thenCompose(sharedDir -> retrieveNewCaps(e,
+                                        current.groups.getOrDefault(sharedDir.file.getName(), ProcessedCaps.empty()), network, crypto)
+                                .thenApply(diff -> current.createGroupDiff(sharedDir.file.getName(), diff))),
+                        (a, b) -> a.mergeGroups(b)));
+    }
+
+    private static CompletableFuture<CapsDiff> retrieveNewCaps(EntryPoint sharingDir,
+                                                               ProcessedCaps current,
+                                                               NetworkAccess network,
+                                                               Crypto crypto) {
+        return NetworkAccess.getLatestEntryPoint(sharingDir, network)
+                .thenCompose(sharedDir ->retrieveNewCaps(sharedDir, current.readCapBytes, current.writeCapBytes, network, crypto));
+    }
+
+    private static CompletableFuture<CapsDiff> retrieveNewCaps(RetrievedEntryPoint sharedDir,
+                                                               long readCapBytes,
+                                                               long writeCapBytes,
+                                                               NetworkAccess network,
+                                                               Crypto crypto) {
+        return CapabilityStore.loadReadAccessSharingLinksFromIndex(null, sharedDir.file,
+                null, network, crypto, readCapBytes, false, true)
+                .thenCompose(newReadCaps ->
+                        getWritableCaps(sharedDir.file, writeCapBytes, crypto, network)
+                                .thenApply(writeable ->
+                                        new CapsDiff.ReadAndWriteCaps(newReadCaps, writeable)))
+                .thenApply(newCaps -> new CapsDiff(readCapBytes, writeCapBytes, newCaps, Collections.emptyMap()));
     }
 
     private synchronized CompletableFuture<CapsDiff> ensureUptodate(String friend,
-                                                                   EntryPoint originalSharedDir,
-                                                                   ProcessedCaps current,
-                                                                   Crypto crypto,
-                                                                   NetworkAccess network) {
-        // check there are no new capabilities in the friend's shared directory
-        return getCapsFrom(friend, originalSharedDir, current.readCapBytes, current.writeCapBytes, network)
+                                                                    EntryPoint originalSharedDir,
+                                                                    List<EntryPoint> groups,
+                                                                    ProcessedCaps current,
+                                                                    Crypto crypto,
+                                                                    NetworkAccess network) {
+        // check there are no new capabilities in the friend's shared directory, or any of their groups
+        return getCapsFrom(friend, originalSharedDir, groups, current, network)
                 .thenCompose(diff -> addNewCapsToMirror(friend, current, diff, network))
                 .thenCompose(diff -> getAndUpdateWorldRoot(network)
                         .thenApply(y -> diff));
     }
 
-    private synchronized CompletableFuture<CapabilitiesFromUser> getWritableCaps(FileWrapper sharedDir,
-                                                                                 long byteOffsetWrite,
-                                                                                 Crypto crypto,
-                                                                                 NetworkAccess network) {
+    private static synchronized CompletableFuture<CapabilitiesFromUser> getWritableCaps(FileWrapper sharedDir,
+                                                                                        long byteOffsetWrite,
+                                                                                        Crypto crypto,
+                                                                                        NetworkAccess network) {
         return CapabilityStore.getEditableCapabilityFileSize(sharedDir, crypto, network)
                 .thenCompose(editFilesize -> {
                     if (editFilesize == byteOffsetWrite)
@@ -419,10 +444,7 @@ public class IncomingCapCache {
                                                            ProcessedCaps current,
                                                            CapsDiff diff,
                                                            NetworkAccess network) {
-        List<CapabilityWithPath> readCaps = diff.newCaps.readCaps.getRetrievedCapabilities();
-        List<CapabilityWithPath> writeCaps = diff.newCaps.writeCaps.getRetrievedCapabilities();
-        List<CapabilityWithPath> all = Stream.concat(readCaps.stream(), writeCaps.stream())
-                .collect(Collectors.toList());
+        List<CapabilityWithPath> all = diff.getNewCaps();
 
         // Add all new caps to mirror tree
         return Futures.reduceAll(all, worldRoot, (r, c) -> addCapToMirror(friend, r, c, crypto, network), (a, b) -> b)
