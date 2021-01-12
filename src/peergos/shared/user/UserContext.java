@@ -1926,6 +1926,10 @@ public class UserContext {
                 .thenCompose(followersUid -> followersUid.isPresent() ?
                         removeFromGroup(followersUid.get(), username) :
                         Futures.of(true))
+                .thenCompose(x -> getGroupUid(SocialState.FRIENDS_GROUP_NAME)
+                        .thenCompose(followersUid -> followersUid.isPresent() ?
+                                removeFromGroup(followersUid.get(), username) :
+                                Futures.of(true)))
                 .thenCompose(x -> unshareItemsInSharingFolder(username, username)) // revoke access to everything ever shared with this user!
                 .thenCompose(x -> getSharingFolder())
                 .thenCompose(sharing -> getByPath(sharingDir)
