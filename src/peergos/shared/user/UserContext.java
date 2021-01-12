@@ -1956,15 +1956,23 @@ public class UserContext {
                         return Futures.of(true);
                     return CapabilityStore.loadReadAccessSharingLinksFromIndex(null, opt.get(), null,
                             network, crypto, 0, false, false)
-                            .thenCompose(readCaps -> Futures.reduceAll(readCaps.getRetrievedCapabilities(), true,
-                                    (b, c) -> unShareReadAccess(Paths.get(c.path), usernameToRevoke),
-                                    (a, b) -> a && b))
+                            .thenCompose(readCaps -> revokeAllReadCaps(readCaps.getRetrievedCapabilities(), usernameToRevoke))
                             .thenCompose(x -> CapabilityStore.loadWriteAccessSharingLinksFromIndex(null, opt.get(), null,
                                     network, crypto, 0, false, false)
-                                    .thenCompose(writeCaps -> Futures.reduceAll(writeCaps.getRetrievedCapabilities(), true,
-                                            (b, c) -> unShareWriteAccess(Paths.get(c.path), usernameToRevoke),
-                                            (a, b) -> a && b)));
+                                    .thenCompose(writeCaps -> revokeAllWriteCaps(writeCaps.getRetrievedCapabilities(), usernameToRevoke)));
                 });
+    }
+
+    private CompletableFuture<Boolean> revokeAllReadCaps(List<CapabilityWithPath> caps, String usernameToRevoke) {
+        return Futures.reduceAll(caps, true,
+                (b, c) -> unShareReadAccess(Paths.get(c.path), usernameToRevoke),
+                (a, b) -> a && b);
+    }
+
+    private CompletableFuture<Boolean> revokeAllWriteCaps(List<CapabilityWithPath> caps, String usernameToRevoke) {
+        return Futures.reduceAll(caps, true,
+                (b, c) -> unShareWriteAccess(Paths.get(c.path), usernameToRevoke),
+                (a, b) -> a && b);
     }
 
     public CompletableFuture<Snapshot> cleanPartialUploads() {
