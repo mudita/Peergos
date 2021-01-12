@@ -374,7 +374,8 @@ public class IncomingCapCache {
                             return Serialize.readFully(stateOpt.get(), crypto, network)
                                     .thenApply(arr -> ProcessedCaps.fromCbor(CborObject.fromByteArray(arr)));
                         }))
-                .thenCompose(currentState -> ensureUptodate(friend, sharedDir, groups, currentState, crypto, network));
+                .thenCompose(currentState -> ensureUptodate(friend, sharedDir, groups, currentState, crypto, network))
+                .exceptionally(t -> CapsDiff.empty());
     }
 
     public CompletableFuture<CapsDiff> getCapsFrom(String friend,

@@ -1909,15 +1909,58 @@ public class UserContext {
                 });
     }
 
+    public CompletableFuture<Optional<String>> getGroupUid(String groupName) {
+        return getGroupNameMappings()
+                .thenApply(m -> m.uidToGroupName.entrySet().stream()
+                        .filter(e -> e.getValue().equals(groupName))
+                        .map(e -> e.getKey())
+                        .findFirst());
+    }
+
     @JsMethod
     public CompletableFuture<Boolean> removeFollower(String username) {
         LOG.info("Remove follower: " + username);
         // remove /$us/shared/$them
         Path sharingDir = Paths.get(this.username, SHARED_DIR_NAME, username);
-        return getSharingFolder()
+        return getGroupUid(SocialState.FOLLOWERS_GROUP_NAME)
+                .thenCompose(followersUid -> followersUid.isPresent() ?
+                        removeFromGroup(followersUid.get(), username) :
+                        Futures.of(true))
+                .thenCompose(x -> unshareItemsInSharingFolder(username, username)) // revoke access to everything ever shared with this user!
+                .thenCompose(x -> getSharingFolder())
                 .thenCompose(sharing -> getByPath(sharingDir)
                         .thenCompose(dir -> dir.get().remove(sharing, sharingDir, this)))
                 .thenApply(x -> true);
+    }
+
+    /** Remove a user from a group. This involves rotating the keys to the group sharing dir,
+     *  and then also rotating the keys for everything ever shared with the group.
+     *
+     * @param groupUid
+     * @param username
+     * @return
+     */
+    public CompletableFuture<Boolean> removeFromGroup(String groupUid, String username) {
+        return unShareReadAccess(Paths.get(this.username, SHARED_DIR_NAME, groupUid), username)
+                .thenCompose(x -> unshareItemsInSharingFolder(groupUid, username));
+    }
+
+    public CompletableFuture<Boolean> unshareItemsInSharingFolder(String folderName, String usernameToRevoke) {
+        return getByPath(Paths.get(username, SHARED_DIR_NAME, folderName))
+                .thenCompose(opt -> {
+                    if (opt.isEmpty())
+                        return Futures.of(true);
+                    return CapabilityStore.loadReadAccessSharingLinksFromIndex(null, opt.get(), null,
+                            network, crypto, 0, false, false)
+                            .thenCompose(readCaps -> Futures.reduceAll(readCaps.getRetrievedCapabilities(), true,
+                                    (b, c) -> unShareReadAccess(Paths.get(c.path), usernameToRevoke),
+                                    (a, b) -> a && b))
+                            .thenCompose(x -> CapabilityStore.loadWriteAccessSharingLinksFromIndex(null, opt.get(), null,
+                                    network, crypto, 0, false, false)
+                                    .thenCompose(writeCaps -> Futures.reduceAll(writeCaps.getRetrievedCapabilities(), true,
+                                            (b, c) -> unShareWriteAccess(Paths.get(c.path), usernameToRevoke),
+                                            (a, b) -> a && b)));
+                });
     }
 
     public CompletableFuture<Snapshot> cleanPartialUploads() {

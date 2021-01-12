@@ -1414,6 +1414,12 @@ public class PeergosNetworkUtils {
 
         Optional<FileWrapper> dir = friend.getByPath(dirToShare1).join();
         Assert.assertTrue(dir.isPresent());
+
+        // remove friend, which should rotate all keys of things shared with the friends group
+        sharer.removeFollower(friend.username).join();
+
+        Optional<FileWrapper> dir2 = friend.getByPath(dirToShare1).join();
+        Assert.assertTrue(dir2.isEmpty());
     }
 
     public static List<Set<AbsoluteCapability>> getAllChildCapsByChunk(FileWrapper dir, NetworkAccess network) {

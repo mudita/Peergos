@@ -59,6 +59,10 @@ public class CapsDiff {
         return priorReadByteOffset + priorWriteByteOffset;
     }
 
+    public static CapsDiff empty() {
+        return new CapsDiff(0, 0, ReadAndWriteCaps.empty(), Collections.emptyMap());
+    }
+
     public static class ReadAndWriteCaps {
         public final CapabilitiesFromUser readCaps, writeCaps;
 
