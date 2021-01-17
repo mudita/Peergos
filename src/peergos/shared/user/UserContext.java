@@ -1397,7 +1397,7 @@ public class UserContext {
                 .thenApply(s -> s.getFriendsGroupUid())
                 .thenCompose(friendsGroupUid -> getByPath(path.toString())
                         .thenCompose(file -> shareReadAccessWithAll(file.orElseThrow(() ->
-                                new IllegalStateException("Could not find path " + path.toString())), path, Set.of(friendsGroupUid))));
+                                new IllegalStateException("Could not find path " + path.toString())), path, Collections.singleton(friendsGroupUid))));
     }
 
     @JsMethod
@@ -1406,7 +1406,7 @@ public class UserContext {
                 .thenApply(s -> s.getFollowersGroupUid())
                 .thenCompose(followersGroupUid -> getByPath(path.toString())
                         .thenCompose(file -> shareReadAccessWithAll(file.orElseThrow(() ->
-                                new IllegalStateException("Could not find path " + path.toString())), path, Set.of(followersGroupUid))));
+                                new IllegalStateException("Could not find path " + path.toString())), path, Collections.singleton(followersGroupUid))));
     }
 
     public CompletableFuture<Boolean> shareReadAccessWith(Path path, Set<String> readersToAdd) {
