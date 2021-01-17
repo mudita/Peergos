@@ -1391,6 +1391,24 @@ public class UserContext {
         return sharedWithCache.getDirSharingState(dir);
     }
 
+    @JsMethod
+    public CompletableFuture<Boolean> shareReadAccessWithFriends(Path path) {
+        return getSocialState()
+                .thenApply(s -> s.getFriendsGroupUid())
+                .thenCompose(friendsGroupUid -> getByPath(path.toString())
+                        .thenCompose(file -> shareReadAccessWithAll(file.orElseThrow(() ->
+                                new IllegalStateException("Could not find path " + path.toString())), path, Set.of(friendsGroupUid))));
+    }
+
+    @JsMethod
+    public CompletableFuture<Boolean> shareReadAccessWithFollowers(Path path) {
+        return getSocialState()
+                .thenApply(s -> s.getFollowersGroupUid())
+                .thenCompose(followersGroupUid -> getByPath(path.toString())
+                        .thenCompose(file -> shareReadAccessWithAll(file.orElseThrow(() ->
+                                new IllegalStateException("Could not find path " + path.toString())), path, Set.of(followersGroupUid))));
+    }
+
     public CompletableFuture<Boolean> shareReadAccessWith(Path path, Set<String> readersToAdd) {
         if (readersToAdd.isEmpty())
             return Futures.of(true);
