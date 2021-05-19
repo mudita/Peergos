@@ -1858,6 +1858,7 @@ public class UserContext {
             return CompletableFuture.completedFuture(Optional.of(FileWrapper.createRoot(entrie)));
         FileProperties.ensureValidPath(path);
         String absolutePath = path.startsWith("/") ? path : "/" + path;
+        absolutePath = absolutePath.replace("\\", "/");
         return entrie.getByPath(absolutePath, crypto.hasher, network);
     }
 

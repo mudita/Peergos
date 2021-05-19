@@ -566,13 +566,7 @@ public class Main extends Builder {
                 GATEWAY.main(gatewayArgs);
             }
             a.saveToFileIfAbsent();
-            System.out.println("\n" +
-                    "█╗█╗█╗█╗   ██████╗ ███████╗███████╗██████╗  ██████╗  ██████╗ ███████╗   █╗█╗█╗█╗\n" +
-                    " █████╔╝   ██╔══██╗██╔════╝██╔════╝██╔══██╗██╔════╝ ██╔═══██╗██╔════╝    █████╔╝\n" +
-                    " ██ ██║    ██████╔╝█████╗  █████╗  ██████╔╝██║  ███╗██║   ██║███████╗    ██ ██║\n" +
-                    " █████║    ██╔═══╝ ██╔══╝  ██╔══╝  ██╔══██╗██║   ██║██║   ██║╚════██║    █████║\n" +
-                    "███████╗   ██║     ███████╗███████╗██║  ██║╚██████╔╝╚██████╔╝███████║   ███████╗\n" +
-                    "╚══════╝   ╚═╝     ╚══════╝╚══════╝╚═╝  ╚═╝ ╚═════╝  ╚═════╝ ╚══════╝   ╚══════╝");
+            System.out.println("\nPEERGOS MUDITA");
             boolean generateToken = a.getBoolean("generate-token", false);
             if (generateToken) {
                 System.out.println("Generating signup token...");
