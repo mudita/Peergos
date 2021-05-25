@@ -20,7 +20,7 @@ public class TagsList implements Cborable {
         return new TagsList(Arrays.asList(tags));
     }
 
-    private TagsList(List<TagsListItem> tags) {
+    public TagsList(List<TagsListItem> tags) {
         this.tags = tags;
     }
 

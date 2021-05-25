@@ -867,6 +867,52 @@ public class FileWrapper {
     }
 
     @JsMethod
+    public CompletableFuture<FileWrapper> saveTags(String[] tags,
+                                                   FileWrapper parentOrCurrentFile,
+                                                   UserContext userContext) {
+
+        RetrievedCapability ourPointer = linkPointer.orElse(pointer);
+        WritableAbsoluteCapability us = (WritableAbsoluteCapability) ourPointer.capability;
+        CryptreeNode nodeToUpdate = ourPointer.fileAccess;
+
+        FileProperties newProps = this.withUpdatedTags(tags);
+
+        SigningPrivateKeyAndPublicHash signer = signingPair();
+        return userContext.network.synchronizer.applyComplexUpdate(owner(), signer,
+                (s, committer) -> nodeToUpdate.updateProperties(s, committer, us,
+                        entryWriter, newProps, userContext.network))
+                .thenCompose(finished -> getUpdated(finished, userContext.network));
+
+    }
+
+    private FileProperties withUpdatedTags(String[] tags) {
+
+        ensureUnmodified();
+        FileProperties currentProps = getFileProperties();
+        setModified();
+
+        return new FileProperties(
+                currentProps.name, currentProps.isDirectory, currentProps.isLink,
+                currentProps.mimeType, currentProps.size,
+                currentProps.modified, currentProps.isHidden,
+                currentProps.thumbnail, currentProps.streamSecret,
+                toTagsList(tags));
+
+    }
+
+    private Optional<TagsList> toTagsList(String[] tags){
+
+        List<TagsListItem> tagsListItemList = new ArrayList<>();
+
+        for(String tagName : tags){
+            tagsListItemList.add(new TagsListItem(tagName));
+        }
+
+        return Optional.of(new TagsList(tagsListItemList));
+
+    }
+
+    @JsMethod
     public CompletableFuture<FileWrapper> updateThumbnail(String base64Str, NetworkAccess network) {
         byte[] thumbData = null;
         if (base64Str != null && base64Str.length() > 0) {

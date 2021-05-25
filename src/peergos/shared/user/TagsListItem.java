@@ -11,22 +11,19 @@ import java.util.TreeMap;
 @JsType
 public class TagsListItem implements Cborable {
 
-    public final String Id;
     public final String tagName;
 
-    public TagsListItem(String Id, String tagName) {
-        this.Id = Id;
+    public TagsListItem(String tagName) {
         this.tagName = tagName;
     }
 
-    public static TagsListItem build(String Id, String text) {
-        return new TagsListItem(Id, text);
+    public static TagsListItem build(String text) {
+        return new TagsListItem(text);
     }
 
     @Override
     public CborObject toCbor() {
         Map<String, Cborable> cbor = new TreeMap<>();
-        cbor.put("i", new CborObject.CborString(Id));
         cbor.put("t", new CborObject.CborString(tagName.substring(0, Math.min(tagName.length(), 60))));
         return CborObject.CborMap.build(cbor);
     }
@@ -35,9 +32,8 @@ public class TagsListItem implements Cborable {
         if (! (cbor instanceof CborObject.CborMap))
             throw new IllegalStateException("Incorrect cbor for TagsListItem: " + cbor);
         CborObject.CborMap map = (CborObject.CborMap) cbor;
-        String id = map.getString("i");
         String tagName = map.getString("t");
-        return new TagsListItem(id, tagName);
+        return new TagsListItem(tagName);
     }
 
     @Override
@@ -53,21 +49,17 @@ public class TagsListItem implements Cborable {
 
         TagsListItem that = (TagsListItem) o;
 
-        if (Id != null ? !Id.equals(that.Id) : that.Id != null){
-            return false;
-        }
-
         return Objects.equals(tagName, that.tagName);
 
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(Id, tagName);
+        return Objects.hash(tagName);
     }
 
     @Override
     public String toString() {
-        return " Id:" + Id + " tagName:" + tagName;
+        return "tagName:" + tagName;
     }
 }
