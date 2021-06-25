@@ -2,19 +2,36 @@ package peergos.server.net;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import peergos.server.util.*;
 import peergos.shared.crypto.hash.Hash;
 import peergos.shared.util.ArrayOps;
 
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.stream.*;
 import java.util.zip.GZIPOutputStream;
 
 public abstract class StaticHandler implements HttpHandler
 {
     private final boolean isGzip;
+    private final boolean includeCsp;
+    private final CspHost host;
+    private final List<String> blockstoreDomain;
+    private final List<String> appsubdomains;
+    private final Map<String, String> appDomains;
 
-    public StaticHandler(boolean isGzip) {
+    public StaticHandler(CspHost host,
+                         List<String> blockstoreDomain,
+                         List<String> appSubdomains,
+                         boolean includeCsp,
+                         boolean isGzip) {
+        this.host = host;
+        this.includeCsp = includeCsp;
+        this.blockstoreDomain = blockstoreDomain;
+        this.appsubdomains = appSubdomains;
+        this.appDomains = appSubdomains.stream()
+                .collect(Collectors.toMap(s -> s + "." + host.domain + host.port.map(p -> ":" + p).orElse(""), s -> s));
         this.isGzip = isGzip;
     }
 
@@ -75,8 +92,35 @@ public abstract class StaticHandler implements HttpHandler
                 httpExchange.getResponseHeaders().set("ETag", res.hash);
             }
 
+            String reqHost = httpExchange.getRequestHeaders().get("Host").stream().findFirst().orElse("");
+            boolean isSubdomain = appDomains.containsKey(reqHost);
+            Logging.LOG().info("Req host: " + reqHost);
+            // subdomains and only subdomains can access apps/ files
+            String app = appDomains.get(reqHost);
+            if (isSubdomain ^ path.startsWith("apps/" + app)) {
+                System.err.println("404 FileNotFound: " + path);
+                httpExchange.sendResponseHeaders(404, 0);
+                httpExchange.getResponseBody().close();
+                return;
+            }
+
             // Only allow assets to be loaded from the original host
-//            httpExchange.getResponseHeaders().set("content-security-policy", "default-src https: 'self'");
+            // Todo work on removing unsafe-inline from sub domains
+            if (includeCsp)
+                httpExchange.getResponseHeaders().set("content-security-policy", "default-src 'self' " + this.host + ";" +
+                        "style-src 'self'" +
+                        " " + this.host +
+                        (isSubdomain ? " 'unsafe-inline' https://" + reqHost : "") + // calendar, editor, todoboard, pdfviewer
+                        ";" +
+                        (isSubdomain ? "sandbox allow-scripts allow-forms;" : "") +
+                        "frame-src 'self' " + (isSubdomain ? "" : this.host.wildcard()) + ";" +
+                        "frame-ancestors 'self' " + this.host + ";" +
+                        "connect-src 'self' " + this.host +
+                        (isSubdomain ? "" : blockstoreDomain.stream().map(d -> " https://" + d).collect(Collectors.joining())) + ";" +
+                        "media-src 'self' " + this.host + " blob:;" +
+                        "img-src 'self' " + this.host + " data: blob:;" +
+                        "object-src 'none';"
+                );
             // Don't anyone to load Peergos site in an iframe
             httpExchange.getResponseHeaders().set("x-frame-options", "sameorigin");
             // Enable cross site scripting protection
@@ -85,6 +129,10 @@ public abstract class StaticHandler implements HttpHandler
             httpExchange.getResponseHeaders().set("x-content-type-options", "nosniff");
             // Don't send Peergos referrer to anyone
             httpExchange.getResponseHeaders().set("referrer-policy", "no-referrer");
+            // allow list of permissions
+            httpExchange.getResponseHeaders().set("permissions-policy",
+                    "interest-cohort=(), geolocation=(), gyroscope=(), magnetometer=(), accelerometer=(), microphone=(), " +
+                    "camera=(self), fullscreen=(self)");
             if (! isRoot) {
                 String previousEtag = httpExchange.getRequestHeaders().getFirst("If-None-Match");
                 if (res.hash.equals(previousEtag)) {
@@ -122,7 +170,7 @@ public abstract class StaticHandler implements HttpHandler
         Map<String, Asset> cache = new ConcurrentHashMap<>();
         StaticHandler that = this;
 
-        return new StaticHandler(isGzip) {
+        return new StaticHandler(host, blockstoreDomain, appsubdomains, includeCsp, isGzip) {
             @Override
             public Asset getAsset(String resourcePath) throws IOException {
                 if (! cache.containsKey(resourcePath))

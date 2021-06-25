@@ -125,12 +125,8 @@ public class FileWrapper {
     }
 
     @JsMethod
-    public boolean equals(Object other) {
-        if (other == null)
-            return false;
-        if (!(other instanceof FileWrapper))
-            return false;
-        return pointer.equals(((FileWrapper) other).getPointer());
+    public boolean samePointer(FileWrapper other) {
+        return pointer.equals(other.getPointer());
     }
 
     public CompletableFuture<FileWrapper> getUpdated(NetworkAccess network) {
@@ -635,21 +631,31 @@ public class FileWrapper {
         return overwriteFile(fileData, newSize, network, crypto, monitor);
     }
 
+    public CompletableFuture<Snapshot> overwriteFile(AsyncReader fileData,
+                                                     long newSize,
+                                                     NetworkAccess network,
+                                                     Crypto crypto,
+                                                     ProgressConsumer<Long> monitor,
+                                                     Snapshot s,
+                                                     Committer committer) {
+        long size = getSize();
+        return clean(s, committer, network, crypto)
+                .thenCompose(u -> u.left.overwriteSection(u.right, committer, fileData,
+                        0L, newSize, network, crypto, monitor))
+                .thenCompose(v -> newSize >= size ?
+                        Futures.of(v) :
+                        getUpdated(v, network)
+                                .thenCompose(f -> f.truncate(v, committer, newSize, network, crypto)));
+    }
+
     public CompletableFuture<FileWrapper> overwriteFile(AsyncReader fileData,
                                                         long newSize,
                                                         NetworkAccess network,
                                                         Crypto crypto,
                                                         ProgressConsumer<Long> monitor) {
-        long size = getSize();
         return network.synchronizer.applyComplexUpdate(owner(), signingPair(),
-                (s, committer) -> clean(s, committer, network, crypto)
-                        .thenCompose(u -> u.left.overwriteSection(u.right, committer, fileData,
-                                0L, newSize, network, crypto, monitor))
-                        .thenCompose(v -> newSize >= size ?
-                                Futures.of(v) :
-                                getUpdated(v, network)
-                                        .thenCompose(f -> f.truncate(v, committer, newSize, network, crypto)))
-        ).thenCompose(v -> getUpdated(v, network));
+                (s, committer) -> overwriteFile(fileData, newSize, network, crypto, monitor, s, committer))
+                .thenCompose(v -> getUpdated(v, network));
     }
 
     @JsMethod
@@ -1067,6 +1073,15 @@ public class FileWrapper {
                                     child.map(f -> f.getPointer().capability.rBaseKey), true, network, crypto,
                                     monitor, x);
                         }));
+    }
+
+    public CompletableFuture<Snapshot> append(byte[] fileData,
+                                              NetworkAccess network,
+                                              Crypto crypto,
+                                              Committer committer,
+                                              ProgressConsumer<Long> progress) {
+        long size = getSize();
+        return overwriteSection(version, committer, AsyncReader.build(fileData), size, size + fileData.length, network, crypto, progress);
     }
 
     /**

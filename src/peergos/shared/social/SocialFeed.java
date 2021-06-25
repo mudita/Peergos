@@ -232,8 +232,37 @@ public class SocialFeed {
     @JsMethod
     public synchronized CompletableFuture<SocialFeed> update() {
         return context.getFollowingNodes()
-                .thenCompose(friends -> Futures.reduceAll(friends, this,
-                        (s, f) -> s.updateFriend(f, network), (a, b) -> b));
+                .thenCompose(friends -> Futures.combineAll(friends.stream()
+                        .parallel()
+                        .map(this::getFriendUpdate)
+                        .collect(Collectors.toList())))
+                .thenCompose(updates -> mergeUpdates(updates.stream()
+                        .flatMap(Optional::stream)
+                        .collect(Collectors.toList())));
+    }
+
+    private CompletableFuture<Optional<Triple<String, ProcessedCaps, CapsDiff>>> getFriendUpdate(FriendSourcedTrieNode friend) {
+        ProcessedCaps current = currentCapBytesProcessed.getOrDefault(friend.ownerName, ProcessedCaps.empty());
+        return friend.updateIncludingGroups(network)
+                .thenCompose(x -> friend.getCaps(current, network))
+                .thenApply(diff -> {
+                    if (diff.isEmpty())
+                        return Optional.empty();
+                    return Optional.of(new Triple<>(friend.ownerName, current, diff));
+                });
+    }
+
+    private synchronized CompletableFuture<SocialFeed> mergeUpdates(Collection<Triple<String, ProcessedCaps, CapsDiff>> updates) {
+        List<SharedItem> forFeed = new ArrayList<>();
+        for (Triple<String, ProcessedCaps, CapsDiff> update : updates) {
+            ProcessedCaps updated = update.middle.add(update.right);
+            currentCapBytesProcessed.put(update.left, updated);
+            List<CapabilityWithPath> newCaps = update.right.getNewCaps();
+            newCaps.stream()
+                    .map(c -> new SharedItem(c.cap, extractOwner(c.path), update.left, c.path))
+                    .forEach(forFeed::add);
+        }
+        return addToFeed(forFeed);
     }
 
     private synchronized CompletableFuture<SocialFeed> updateFriend(FriendSourcedTrieNode friend, NetworkAccess network) {
@@ -272,6 +301,8 @@ public class SocialFeed {
     }
 
     private synchronized CompletableFuture<SocialFeed> addToFeed(List<SharedItem> newItems) {
+        if (newItems.isEmpty())
+            return Futures.of(this);
         return mergeInComments(newItems).thenCompose(b -> {
             ByteArrayOutputStream bout = new ByteArrayOutputStream();
             for (SharedItem item : newItems) {
@@ -282,16 +313,37 @@ public class SocialFeed {
                 }
             }
             byte[] data = bout.toByteArray();
-            return Futures.asyncExceptionally(() -> dataDir.appendToChild(FEED_FILE, feedSizeBytes, data, false, network, crypto, x -> {}),
-                    t -> ensureFeedUptodate().thenCompose(x -> dataDir.appendToChild(FEED_FILE, feedSizeBytes, data, false, network, crypto, y -> {})))
-                    .thenCompose(dir -> {
-                        feedSizeRecords += newItems.size();
-                        feedSizeBytes += data.length;
-                        this.dataDir = dir;
-                        return commit();
-                    })
+            return Futures.asyncExceptionally(() -> appendToFeedAndCommitState(data, newItems.size()),
+                    t -> ensureFeedUptodate().thenCompose(x -> appendToFeedAndCommitState(data, newItems.size())))
                     .thenApply(x -> this);
         });
+    }
+
+    private synchronized CompletableFuture<Snapshot> appendToFeedAndCommitState(byte[] data, int records) {
+            return network.synchronizer.applyComplexUpdate(dataDir.owner(), dataDir.signingPair(),
+                    (s, c) -> dataDir.getUpdated(s, network).thenCompose(updated ->
+                            updated.getChild(FEED_FILE, crypto.hasher, network).thenCompose(feedOpt -> {
+                                if (feedOpt.isEmpty())
+                                    return updated.uploadFileSection(updated.version, c, FEED_FILE, AsyncReader.build(data),
+                                            false, 0, data.length, Optional.empty(), false,
+                                            false, network, crypto, x -> {}, crypto.random.randomBytes(RelativeCapability.MAP_KEY_LENGTH));
+                                if (feedOpt.get().getSize() != feedSizeBytes)
+                                    throw new IllegalStateException("Feed size incorrect!");
+                                return feedOpt.get().append(data, network, crypto, c, x -> {});
+                            })).thenCompose(s2 -> {
+                        feedSizeRecords += records;
+                        feedSizeBytes += data.length;
+                        byte[] raw = new FeedState(lastSeenIndex, feedSizeRecords, feedSizeBytes, currentCapBytesProcessed).serialize();
+                        return stateFile.overwriteFile(AsyncReader.build(raw), raw.length, network, crypto, x -> {}, s2, c);
+                    })
+            ).thenCompose(s -> this.dataDir.getUpdated(s, network).thenApply(u -> {
+                this.dataDir = u;
+                return true;
+                    }).thenCompose(x -> this.stateFile.getUpdated(s, network).thenApply(us -> {
+                this.stateFile = us;
+                return s;
+                    }))
+            );
     }
 
     private CompletableFuture<Boolean> ensureFeedUptodate() {
