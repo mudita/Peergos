@@ -126,7 +126,8 @@ public class Main extends Builder {
                     new Command.Arg("ipfs-api-address", "IPFS API port", false, "/ip4/127.0.0.1/tcp/5001"),
                     new Command.Arg("ipfs-gateway-address", "IPFS Gateway port", false, "/ip4/127.0.0.1/tcp/8080"),
                     new Command.Arg("pki.node.swarm.port", "Swarm port of the pki node", true, "5001"),
-                    new Command.Arg("domain", "Domain name to bind to,", false, "localhost"),
+                    new Command.Arg("domain", "Domain name to bind to", false, "localhost"),
+                    new Command.Arg("public-domain", "The public domain name for this server (required if TLS is managed upstream)", false),
                     new Command.Arg("max-users", "The maximum number of local users", false, "1"),
                     ARG_USE_IPFS,
                     new Command.Arg("mutable-pointers-file", "The filename for the mutable pointers datastore", true, "mutable.sql"),
@@ -501,20 +502,24 @@ public class Main extends Builder {
                     p2pSpaceUsage, new ServerMessageStore(getDBConnector(a, "server-messages-sql-file", dbConnectionPool),
                     sqlCommands, core, p2pDht), gc);
             InetSocketAddress localAddress = new InetSocketAddress("0.0.0.0", userAPIAddress.getPort());
+
             Optional<Path> webroot = a.hasArg("webroot") ?
                     Optional.of(Paths.get(a.getArg("webroot"))) :
                     Optional.empty();
             boolean useWebAssetCache = a.getBoolean("webcache", true);
             Optional<String> tlsHostname = hostname.equals("localhost") ? Optional.empty() : Optional.of(hostname);
+            Optional<String> publicHostname = tlsHostname.isPresent() ? tlsHostname : a.getOptionalArg("public-domain");
             Optional<UserService.TlsProperties> tlsProps =
                     tlsHostname.map(host -> new UserService.TlsProperties(host, a.getArg("tls.keyfile.password")));
             int maxConnectionQueue = a.getInt("max-connection-queue", 500);
             int handlerThreads = a.getInt("handler-threads", 50);
             boolean isPublicServer = a.getBoolean("public-server", false);
             Optional<String> basicAuth = a.getOptionalArg("basic-auth");
+            List<String> blockstoreDomains = S3Config.getBlockstoreDomains(a);
+            List<String> appSubdomains = Arrays.asList(a.getArg("apps", "calendar,todo-board,code-editor,pdf").split(","));
             boolean enableCors = a.getBoolean("enable-cors", false);
-            peergos.initAndStart(localAddress, tlsProps, basicAuth, webroot, useWebAssetCache, isPublicServer,
-                    maxConnectionQueue, handlerThreads, enableCors);
+            peergos.initAndStart(localAddress, nodeId, tlsProps, publicHostname, blockstoreDomains, appSubdomains,
+                    a.getBoolean("include-csp", true), basicAuth, webroot, useWebAssetCache, isPublicServer, maxConnectionQueue, handlerThreads, enableCors);
             boolean isPkiNode = nodeId.equals(pkiServerNodeId);
             if (! isPkiNode && useIPFS) {
                 int pkiNodeSwarmPort = a.getInt("pki.node.swarm.port");
@@ -689,11 +694,21 @@ public class Main extends Builder {
             List<UserPublicKeyLink> existing = user.network.coreNode.getChain(username).join();
             Multihash currentStorageNodeId = existing.get(existing.size() - 1).claim.storageProviders.stream().findFirst().get();
             Multihash newStorageNodeId = network.dhtClient.id().join();
+            if (currentStorageNodeId.equals(newStorageNodeId)) {
+                System.err.println("You are trying to migrate a user to their current server. Please supply the url of a different server.");
+                return false;
+            }
+            System.out.println("Migrating user from node " + currentStorageNodeId + " to " + newStorageNodeId);
             List<UserPublicKeyLink> newChain = Migrate.buildMigrationChain(existing, newStorageNodeId, user.signer.secret);
             user.network.coreNode.migrateUser(username, newChain, currentStorageNodeId).join();
+            List<UserPublicKeyLink> updatedChain = user.network.coreNode.getChain(username).join();
+            if (!updatedChain.get(updatedChain.size() - 1).claim.storageProviders.contains(newStorageNodeId))
+                throw new IllegalStateException("Migration failed. Please try again later");
+            System.out.println("Migration complete.");
             return true;
         } catch (Exception ex) {
-            throw new RuntimeException(ex);
+            ex.printStackTrace();
+            return false;
         }
     }
 

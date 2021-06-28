@@ -6,12 +6,14 @@ import java.util.logging.Logger;
 import peergos.server.storage.*;
 import peergos.server.messages.*;
 import peergos.server.storage.admin.*;
-import peergos.server.util.Logging;
+import peergos.server.util.*;
+
 import java.util.logging.Level;
 
 import com.sun.net.httpserver.*;
 import peergos.shared.*;
 import peergos.shared.corenode.*;
+import peergos.shared.io.ipfs.multihash.*;
 import peergos.shared.mutable.*;
 import peergos.shared.social.*;
 import peergos.shared.storage.*;
@@ -116,7 +118,12 @@ public class UserService {
     }
 
     public boolean initAndStart(InetSocketAddress local,
+                                Multihash nodeId,
                                 Optional<TlsProperties> tlsProps,
+                                Optional<String> publicHostname,
+                                List<String> blockstoreDomains,
+                                List<String> appSubdomains,
+                                boolean includeCsp,
                                 Optional<String> basicAuth,
                                 Optional<Path> webroot,
                                 boolean useWebCache,
@@ -203,42 +210,40 @@ public class UserService {
             LOG.info("Using webroot from local file system: " + webroot);
         else
             LOG.info("Using webroot from jar");
-        StaticHandler handler = webroot.map(p -> (StaticHandler) new FileHandler(p, true))
-                .orElseGet(() -> new JarHandler(true, Paths.get("/webroot")));
+        if (isPublicServer && publicHostname.isEmpty())
+            throw new IllegalStateException("Missing arg public-domain");
+        CspHost host = tlsProps.map(p -> new CspHost("https://", p.hostname))
+                .orElse(isPublicServer ?
+                        new CspHost("https://", publicHostname.get())  :
+                        new CspHost("http://",  local.getHostName(), local.getPort()));
+        StaticHandler handler = webroot.map(p -> (StaticHandler) new FileHandler(host, blockstoreDomains, appSubdomains, p, includeCsp, true))
+                .orElseGet(() -> new JarHandler(host, blockstoreDomains, appSubdomains, includeCsp, true, Paths.get("/webroot")));
 
         if (useWebCache) {
             LOG.info("Caching web-resources");
             handler = handler.withCache();
         }
 
-        BiConsumer<String, HttpHandler> addHandler = (path, handlerFunc) -> {
-            if (basicAuth.isPresent())
-                localhostServer.createContext(path, new BasicAuthHandler(basicAuth.get(), handlerFunc));
-            else
-                localhostServer.createContext(path, handlerFunc);
-            if (tlsServer != null) {
-                if (basicAuth.isPresent())
-                    tlsServer.createContext(path, new HSTSHandler(new BasicAuthHandler(basicAuth.get(), handlerFunc)));
-                else
-                    tlsServer.createContext(path, new HSTSHandler(handlerFunc));
-            }
-        };
-
-        addHandler.accept(Constants.DHT_URL, new DHTHandler(storage, crypto.hasher, (h, i) -> true, isPublicServer));
-        addHandler.accept("/" + Constants.CORE_URL,
-                new CoreNodeHandler(this.coreNode, isPublicServer, enableCors));
-        addHandler.accept("/" + Constants.SOCIAL_URL,
-                new SocialHandler(this.social, isPublicServer, enableCors));
-        addHandler.accept("/" + Constants.MUTABLE_POINTERS_URL,
-                new MutationHandler(this.mutable, isPublicServer, enableCors));
-        addHandler.accept("/" + Constants.ADMIN_URL,
-                new AdminHandler(this.controller, isPublicServer, enableCors));
-        addHandler.accept("/" + Constants.SPACE_USAGE_URL,
-                new SpaceHandler(this.usage, isPublicServer, enableCors));
-        addHandler.accept("/" + Constants.SERVER_MESSAGE_URL,
-                new ServerMessageHandler(this.serverMessages, coreNode, storage, isPublicServer, enableCors));
-        addHandler.accept("/" + Constants.PUBLIC_FILES_URL, new PublicFileHandler(crypto.hasher, coreNode, mutable, storage));
-        addHandler.accept(UI_URL, handler);
+        addHandler(localhostServer, tlsServer, Constants.DHT_URL,
+                new DHTHandler(storage, crypto.hasher, (h, i) -> true, isPublicServer),
+                basicAuth, local, host, nodeId, false);
+        addHandler(localhostServer, tlsServer, "/" + Constants.CORE_URL,
+                new CoreNodeHandler(this.coreNode, isPublicServer, enableCors), basicAuth, local, host, nodeId, false);
+        addHandler(localhostServer, tlsServer, "/" + Constants.SOCIAL_URL,
+                new SocialHandler(this.social, isPublicServer, enableCors), basicAuth, local, host, nodeId, false);
+        addHandler(localhostServer, tlsServer, "/" + Constants.MUTABLE_POINTERS_URL,
+                new MutationHandler(this.mutable, isPublicServer, enableCors), basicAuth, local, host, nodeId, false);
+        addHandler(localhostServer, tlsServer, "/" + Constants.ADMIN_URL,
+                new AdminHandler(this.controller, isPublicServer, enableCors), basicAuth, local, host, nodeId, false);
+        addHandler(localhostServer, tlsServer, "/" + Constants.SPACE_USAGE_URL,
+                new SpaceHandler(this.usage, isPublicServer, enableCors), basicAuth, local, host, nodeId, false);
+        addHandler(localhostServer, tlsServer, "/" + Constants.SERVER_MESSAGE_URL,
+                new ServerMessageHandler(this.serverMessages, coreNode, storage, isPublicServer, enableCors),
+                basicAuth, local, host, nodeId, false);
+        addHandler(localhostServer, tlsServer, "/" + Constants.PUBLIC_FILES_URL,
+                new PublicFileHandler(crypto.hasher, coreNode, mutable, storage),
+                basicAuth, local, host, nodeId, false);
+        addHandler(localhostServer, tlsServer, UI_URL, handler, basicAuth, local, host, nodeId, true);
 
         localhostServer.setExecutor(Executors.newFixedThreadPool(handlerPoolSize));
         localhostServer.start();
@@ -249,6 +254,27 @@ public class UserService {
         }
 
         return true;
+    }
+
+    private static void addHandler(HttpServer localhostServer,
+                                   HttpsServer tlsServer,
+                                   String path,
+                                   HttpHandler handler,
+                                   Optional<String> basicAuth,
+                                   InetSocketAddress local,
+                                   CspHost host,
+                                   Multihash nodeId,
+                                   boolean allowSubdomains) {
+        HttpHandler withAuth = basicAuth
+                    .map(ba -> (HttpHandler) new BasicAuthHandler(ba, handler))
+                    .orElse(handler);
+        // Allow local requests, ones to the public host, and p2p reqs to our node
+        List<String> allowedHosts = Arrays.asList("127.0.0.1:" + local.getPort(), host.host(), nodeId.toString());
+        SubdomainHandler subdomainHandler = new SubdomainHandler(allowedHosts, withAuth, allowSubdomains);
+        localhostServer.createContext(path, subdomainHandler);
+        if (tlsServer != null) {
+            tlsServer.createContext(path, new HSTSHandler(subdomainHandler));
+        }
     }
 
     public static KeyStore getKeyStore(String filename, char[] password)
