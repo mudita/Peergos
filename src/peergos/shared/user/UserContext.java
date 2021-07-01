@@ -810,7 +810,7 @@ public class UserContext {
                                         RelativeCapability.buildSubsequentChunk(crypto.random.randomBytes(32), rootRKey);
                                 return CryptreeNode.createEmptyDir(MaybeMultihash.empty(), rootRKey, rootWKey, Optional.of(writerPair),
                                                 new FileProperties(directoryName, true, false, "", 0, LocalDateTime.now(),
-                                                        false, Optional.empty(), Optional.empty()),
+                                                        false, Optional.empty(), Optional.empty(), Optional.empty()),
                                                 Optional.empty(), SymmetricKey.random(), nextChunk, crypto.hasher)
                                         .thenCompose(root -> {
                                             LOG.info("Uploading entry point directory");
@@ -1858,6 +1858,7 @@ public class UserContext {
             return CompletableFuture.completedFuture(Optional.of(FileWrapper.createRoot(entrie)));
         FileProperties.ensureValidPath(path);
         String absolutePath = path.startsWith("/") ? path : "/" + path;
+        absolutePath = absolutePath.replace("\\", "/");
         return entrie.getByPath(absolutePath, crypto.hasher, network);
     }
 
